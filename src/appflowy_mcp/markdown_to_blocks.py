@@ -34,6 +34,97 @@ _TODO = re.compile(r"^(\s*)-\s+\[( |x|X)\]\s*(.*)$")
 _QUOTE = re.compile(r"^>\s?(.*)$")
 _DIVIDER = re.compile(r"^---+$")
 _FENCE = re.compile(r"^```\s*([\w+-]*)\s*$")
+_TABLE_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{3,}:?(\s*\|\s*:?-{3,}:?)*\s*\|?\s*$")
+
+
+def _split_row(line: str) -> list[str]:
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    # Split on `|` but not on `\|` (escaped pipe), then unescape.
+    cells: list[str] = []
+    buf: list[str] = []
+    i = 0
+    n = len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\\" and i + 1 < n and s[i + 1] == "|":
+            buf.append("|")
+            i += 2
+            continue
+        if ch == "|":
+            cells.append("".join(buf).strip())
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    cells.append("".join(buf).strip())
+    return cells
+
+
+def _cell_align(cell: str) -> str | None:
+    cell = cell.strip()
+    left = cell.startswith(":")
+    right = cell.endswith(":")
+    if left and right:
+        return "center"
+    if right:
+        return "right"
+    if left:
+        return "left"
+    return None
+
+
+def _parse_table(lines: list[str], start: int) -> tuple[dict[str, Any], int] | None:
+    """If lines[start..] looks like a markdown table, build the nested block.
+
+    Returns (table_block, next_line_index) or None.
+    """
+    n = len(lines)
+    if start + 1 >= n:
+        return None
+    if not _TABLE_ROW.match(lines[start]):
+        return None
+    if not _TABLE_SEP.match(lines[start + 1]):
+        return None
+
+    header_cells = _split_row(lines[start])
+    sep_cells = _split_row(lines[start + 1])
+    aligns = [_cell_align(c) for c in sep_cells]
+    col_count = max(len(header_cells), len(sep_cells))
+
+    data_rows: list[list[str]] = [header_cells]
+    i = start + 2
+    while i < n and _TABLE_ROW.match(lines[i]):
+        data_rows.append(_split_row(lines[i]))
+        i += 1
+
+    # rowsLen / colsLen are required by AppFlowy UI to render the table.
+    table_block = _block("simple_table", data={
+        "rowsLen": len(data_rows),
+        "colsLen": col_count,
+    })
+    for row_index, cells in enumerate(data_rows):
+        row_block = _block("simple_table_row")
+        for col_index in range(col_count):
+            cell_text = cells[col_index] if col_index < len(cells) else ""
+            cell_data: dict[str, Any] = {
+                "rowPosition": row_index,
+                "colPosition": col_index,
+            }
+            align = aligns[col_index] if col_index < len(aligns) else None
+            if align:
+                cell_data["align"] = align
+            cell_block = _block("simple_table_cell", data=cell_data)
+            # Each cell holds a paragraph with the text (matching AppFlowy importer).
+            cell_block["children"].append(_block("paragraph", text=cell_text))
+            row_block["children"].append(cell_block)
+        table_block["children"].append(row_block)
+    return table_block, i
 
 
 def _block(ty: str, text: str | None = None, data: dict[str, Any] | None = None,
@@ -71,6 +162,16 @@ def parse(markdown: str) -> list[dict[str, Any]]:
         if line.strip() == "":
             i += 1
             continue
+
+        # Table: needs lookahead for separator line, handle before paragraph fallback
+        if _TABLE_ROW.match(line):
+            parsed = _parse_table(lines, i)
+            if parsed is not None:
+                table_block, next_i = parsed
+                flush_lists_above(0)
+                append_block(table_block)
+                i = next_i
+                continue
 
         # Fenced code (multi-line) — handle before single-line patterns
         m = _FENCE.match(line)
