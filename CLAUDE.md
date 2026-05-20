@@ -81,7 +81,7 @@ The server has **no static credentials**. Per-user identity comes from the `X-Ap
 - Reads headers from `ctx.request_context.request.headers` (FastMCP exposes the underlying Starlette `Request` to tool handlers).
 - Cache key is `(email, password)`. A password change creates a fresh entry; the old one stays in memory until process restart (acceptable for the team-scale we target).
 - Each cached `AppFlowyClient` has its own `_auth_lock`, so parallel calls from the same user serialise only across refresh, not normal requests.
-- TLS must be terminated in front of the server when exposed beyond localhost (credentials are in headers on every request). Currently we run plain HTTP on `:8765`; production requires an nginx route or sidecar.
+- TLS must be terminated in front of the server (credentials are in headers on every request). The stack's nginx terminates TLS via a `location /mcp` block that proxies to `appflowy_mcp:8765` with `proxy_buffering off` (MCP streams responses as SSE). Recommended URL: `https://your-host/mcp`. The raw HTTP port `8765` stays published for dev only.
 
 ## AppFlowy document Y.Doc schema
 

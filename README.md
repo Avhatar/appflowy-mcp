@@ -51,14 +51,29 @@ docker compose logs -f appflowy_mcp
 
 `APPFLOWY_BASE_URL` inside the container points at the internal `appflowy_cloud`
 service, bypassing nginx/TLS. The MCP endpoint itself is plain HTTP on port
-`8765` — **terminate TLS at your reverse proxy** if exposing beyond localhost,
-because each MCP request carries a user's email and password in headers.
+`8765`. **Always terminate TLS in front of it** when exposing beyond localhost,
+because each MCP request carries a user's email and password in headers. The
+recommended setup is to add an `/mcp` location to your existing reverse proxy
+that forwards to `appflowy_mcp:8765`:
+
+```nginx
+location /mcp {
+    proxy_pass http://appflowy_mcp:8765;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $http_host;
+    proxy_pass_request_headers on;
+    proxy_buffering off;            # MCP streams responses (SSE)
+    chunked_transfer_encoding on;
+    proxy_read_timeout 86400s;
+}
+```
 
 ### Hand the endpoint URL to your team
 
-Whatever `https://host:8765/mcp` (or whatever your TLS-terminated URL is)
-resolves to from the team's machines — that's what every user puts in their
-agent config, along with their own AppFlowy credentials.
+Whatever `https://your-host/mcp` resolves to from the team's machines — that's
+what every user puts in their agent config, along with their own AppFlowy
+credentials.
 
 ---
 
@@ -73,10 +88,9 @@ You need:
 ### Claude Code
 
 ```bash
-claude mcp add --transport http \
+claude mcp add -s user --transport http appflowy https://your-server/mcp \
   --header "X-AppFlowy-Email: you@your.domain" \
-  --header "X-AppFlowy-Password: your-appflowy-password" \
-  appflowy https://your-server:8765/mcp
+  --header "X-AppFlowy-Password: your-appflowy-password"
 claude mcp list   # appflowy ✓ Connected
 ```
 
