@@ -6,7 +6,7 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from .client import AppFlowyClient
 from .config import Config
-from .doc_builder import build_document
+from .doc_builder import append_blocks_to_document, build_document
 from .markdown import extract_plain_text, render_document
 from .markdown_to_blocks import parse as parse_markdown
 
@@ -337,6 +337,56 @@ def build_server(config: Config) -> tuple[FastMCP, ClientPool]:
             workspace_id, view_id, encoded, collab_type=0
         )
         return {"view_id": view_id, "blocks_written": len(blocks)}
+
+    @mcp.tool()
+    async def append_to_page(
+        ctx: Context, workspace_id: str, view_id: str, markdown_content: str
+    ) -> dict[str, Any]:
+        """Append markdown to the end of a Document page (no overwrite).
+
+        Unlike replace_page_content which rewrites the whole page, this loads
+        the existing Y.Doc, mutates it by inserting the new blocks at the end
+        of the root page's children, and writes the updated full state back.
+        Existing content (including formatting and inline marks) is preserved
+        exactly as-is.
+
+        Same live-editor conflict as replace_page_content: if the page is open
+        in someone's AppFlowy browser/desktop client, the live WebSocket
+        session can overwrite our write on its next sync. Close all editor
+        tabs/windows for the page first, then reopen after.
+
+        Supported markdown is the same set as replace_page_content (headings,
+        paragraphs, lists with nesting, quotes, code, dividers, tables,
+        inline **bold** / *italic* / `code` / [link](url) / ~~strike~~).
+
+        Only valid for Document-layout pages.
+
+        Args:
+            workspace_id: Workspace UUID (from list_workspaces).
+            view_id: Page UUID (from list_pages).
+            markdown_content: Markdown to append at the end of the page.
+
+        Returns: { view_id, blocks_appended } on success.
+        """
+        new_blocks = parse_markdown(markdown_content)
+        if not new_blocks:
+            return {"view_id": view_id, "blocks_appended": 0}
+
+        client = await pool.get(ctx)
+        page = await client.get_page_view(workspace_id, view_id)
+        raw = bytes(page.get("data", {}).get("encoded_collab") or b"")
+        if not raw:
+            return {
+                "view_id": view_id,
+                "blocks_appended": 0,
+                "error": "page has no existing document; use replace_page_content first",
+            }
+
+        encoded = append_blocks_to_document(raw, new_blocks)
+        await client.update_page_collab(
+            workspace_id, view_id, encoded, collab_type=0
+        )
+        return {"view_id": view_id, "blocks_appended": len(new_blocks)}
 
     @mcp.tool()
     async def search_pages(

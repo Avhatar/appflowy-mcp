@@ -140,6 +140,52 @@ def build_document(blocks: list[dict[str, Any]]) -> bytes:
     return _encode_encoded_collab(state_vector, doc_state, version=0)
 
 
+def append_blocks_to_document(
+    existing_encoded_collab: bytes, blocks: list[dict[str, Any]]
+) -> bytes:
+    """Load an existing document, append `blocks` to the end of the root page,
+    and return the re-encoded bincode bytes for `PUT /collab/{obj}`.
+
+    Unlike `build_document`, this preserves the existing Y.Doc state — including
+    its block tree, text deltas, and CRDT clocks — and just mutates it by
+    inserting new top-level blocks. The wire format on the way out is still a
+    full-state `encoded_collab_v1`, because that's what the PUT endpoint
+    expects.
+
+    Same WS-conflict caveat as the rest of the write path: if a live editor
+    session is open on this page, its next sync can overwrite our upsert with
+    its local state. Mitigate by closing all editor sessions before calling.
+    """
+    doc = Doc()
+    doc["data"] = Map({})
+    doc.apply_update(existing_encoded_collab)
+
+    document = doc["data"]["document"]
+    page_id = document["page_id"]
+    blocks_map = document["blocks"]
+    meta = document["meta"]
+    children_map = meta["children_map"]
+    text_map = meta["text_map"]
+
+    page_block = blocks_map[page_id]
+    page_children_key = page_block["children"]
+
+    new_ids: list[str] = []
+    for b in blocks:
+        bid = _add_block(blocks_map, children_map, text_map, page_id, b)
+        new_ids.append(bid)
+
+    # Mutate the existing Y.Array of root children — do NOT reassign the slot
+    # in children_map (that would replace the array and lose CRDT history).
+    root_children = children_map[page_children_key]
+    for bid in new_ids:
+        root_children.append(bid)
+
+    doc_state = doc.get_update()
+    state_vector = doc.get_state()
+    return _encode_encoded_collab(state_vector, doc_state, version=0)
+
+
 def build_replacement_update(
     existing_encoded_collab: bytes, blocks: list[dict[str, Any]]
 ) -> bytes:

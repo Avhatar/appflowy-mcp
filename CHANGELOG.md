@@ -2,6 +2,19 @@
 
 Version history of `appflowy-mcp`. Format is informal; we record what changed and why.
 
+## 0.10.0 — 2026-05-21
+
+### Added
+- `append_to_page(workspace_id, view_id, markdown_content)` tool — the first partial-edit primitive. Loads the existing Y.Doc via `apply_update`, parses the new markdown into blocks, inserts them at the end of the root page's children Y.Array, re-encodes the full state as `encoded_collab_v1`, and PUTs. Existing content (including inline formatting and CRDT history) is preserved as-is.
+- New `append_blocks_to_document(existing_encoded_collab, blocks)` helper in [doc_builder.py](src/appflowy_mcp/doc_builder.py). Sibling of `build_document` but starts from an existing Doc state instead of an empty one. Mutates `children_map[root]` Y.Array in place (does NOT reassign the slot — that would replace the array and lose CRDT clocks).
+
+### Design notes
+- Same WS-conflict caveat as `replace_page_content`: live editor sessions can overwrite our write on next sync. Wire protocol is still `PUT /api/workspace/{ws}/collab/{obj}` with a full-state `encoded_collab_v1`; partial Yrs updates over `/web-update` was the failed 0.7.0 experiment and is parked.
+- This is Phase 1 of the partial-editing track. Phase 2 (`replace_section(heading, ...)` / `insert_after_heading(...)`) and Phase 3 (`patch_block(block_id, ...)`) are deferred until concrete need.
+
+### Reminder
+- New tool — every Claude Code (or other MCP) client must restart its session after pulling the new image. The tool list is requested at connect time.
+
 ## 0.9.0 — 2026-05-21
 
 ### Added

@@ -6,7 +6,7 @@ An MCP server that gives LLM agents (Claude Code, Cline, Claude Desktop, ...) to
 
 ## What is inside
 
-A thin wrapper around the AppFlowy-Cloud REST API plus native Yrs CRDT document assembly on pycrdt. Per-user auth model: every MCP HTTP request carries `X-AppFlowy-Email` / `X-AppFlowy-Password` headers, and tools run under the caller's AppFlowy identity. No shared bot. 7 MCP tools:
+A thin wrapper around the AppFlowy-Cloud REST API plus native Yrs CRDT document assembly on pycrdt. Per-user auth model: every MCP HTTP request carries `X-AppFlowy-Email` / `X-AppFlowy-Password` headers, and tools run under the caller's AppFlowy identity. No shared bot. 8 MCP tools:
 
 | Tool | What it does | AppFlowy endpoint |
 |---|---|---|
@@ -16,7 +16,8 @@ A thin wrapper around the AppFlowy-Cloud REST API plus native Yrs CRDT document 
 | `search_pages` | substring/regex search across all Document pages → snippets | folder walk + per-page `get_document_decoded` + plain-text extraction; server-side scan, only snippets returned |
 | `create_page` | new empty page | `POST /api/workspace/{ws}/page-view` |
 | `rename_page` | rename | `POST /api/workspace/{ws}/page-view/{view}/update-name` |
-| `replace_page_content` | markdown → write | `PUT /api/workspace/{ws}/collab/{obj}` with `encoded_collab_v1` (a bincode wrapper around the Y.Doc) |
+| `replace_page_content` | full rewrite from markdown | `PUT /api/workspace/{ws}/collab/{obj}` with a fresh-built `encoded_collab_v1` |
+| `append_to_page` | append markdown to the end of a page (existing content preserved) | load existing `encoded_collab` → mutate root children Y.Array via pycrdt → `PUT` updated full state |
 
 ## Folder layout
 
