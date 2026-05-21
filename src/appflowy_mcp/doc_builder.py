@@ -330,16 +330,18 @@ def replace_section_in_document(
     return _encode_encoded_collab(state_vector, doc_state, version=0), None
 
 
-def insert_after_heading_in_document(
+def _insert_at_heading(
     existing_encoded_collab: bytes,
     heading: str,
     new_blocks: list[dict[str, Any]],
-    match_index: int | None = None,
+    match_index: int | None,
+    before: bool,
 ) -> tuple[bytes | None, str | None]:
-    """Insert new blocks immediately after a root-level heading (i.e. at the
-    very top of that section). Returns (encoded_v1, error).
+    """Shared implementation for insert_after_heading and insert_before_heading.
 
-    Same matching/ambiguity rules as `replace_section_in_document`.
+    `before=False` → insert at index+1 (right after the heading, top of section).
+    `before=True`  → insert at index (right before the heading, end of previous
+    section / new section above).
     """
     doc = Doc()
     doc["data"] = Map({})
@@ -362,7 +364,7 @@ def insert_after_heading_in_document(
         return None, err
 
     start_index, _heading_id, _level = match
-    insert_at = start_index + 1
+    insert_at = start_index if before else start_index + 1
 
     new_ids: list[str] = []
     for b in new_blocks:
@@ -374,6 +376,42 @@ def insert_after_heading_in_document(
     doc_state = doc.get_update()
     state_vector = doc.get_state()
     return _encode_encoded_collab(state_vector, doc_state, version=0), None
+
+
+def insert_after_heading_in_document(
+    existing_encoded_collab: bytes,
+    heading: str,
+    new_blocks: list[dict[str, Any]],
+    match_index: int | None = None,
+) -> tuple[bytes | None, str | None]:
+    """Insert new blocks immediately after a root-level heading (i.e. at the
+    very top of that section). Returns (encoded_v1, error).
+
+    Same matching/ambiguity rules as `replace_section_in_document`.
+    """
+    return _insert_at_heading(
+        existing_encoded_collab, heading, new_blocks, match_index, before=False
+    )
+
+
+def insert_before_heading_in_document(
+    existing_encoded_collab: bytes,
+    heading: str,
+    new_blocks: list[dict[str, Any]],
+    match_index: int | None = None,
+) -> tuple[bytes | None, str | None]:
+    """Insert new blocks immediately before a root-level heading (i.e. at the
+    very end of the previous section, or the beginning of the page if the
+    heading is first). Returns (encoded_v1, error).
+
+    Useful for placing a new H2 section ahead of an existing one without
+    rewriting the surrounding content. Mirror of `insert_after_heading_in_document`.
+
+    Same matching/ambiguity rules as `replace_section_in_document`.
+    """
+    return _insert_at_heading(
+        existing_encoded_collab, heading, new_blocks, match_index, before=True
+    )
 
 
 def append_blocks_to_document(

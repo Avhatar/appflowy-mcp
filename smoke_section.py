@@ -16,6 +16,7 @@ from appflowy_mcp.doc_builder import (
     append_blocks_to_document,
     build_document,
     insert_after_heading_in_document,
+    insert_before_heading_in_document,
     replace_section_in_document,
 )
 from appflowy_mcp.markdown import render_document
@@ -200,6 +201,43 @@ def test_insert_after_heading() -> None:
     print("OK\n")
 
 
+def test_insert_before_heading() -> None:
+    print("=== test_insert_before_heading ===")
+    enc = build_initial()
+    raw = encoded_v1_to_raw(enc)
+
+    new_enc, err = insert_before_heading_in_document(raw, "Beta", parse("## Inserted Before Beta\n\nNew section body."))
+    assert err is None
+    rendered = render(new_enc)
+    print(rendered)
+    alpha_idx = rendered.index("## Alpha")
+    inserted_idx = rendered.index("## Inserted Before Beta")
+    beta_idx = rendered.index("## Beta")
+    assert alpha_idx < inserted_idx < beta_idx, (
+        f"order broken: alpha={alpha_idx} inserted={inserted_idx} beta={beta_idx}"
+    )
+    # Body of Alpha must still come before the inserted section
+    assert rendered.index("Alpha body line 2.") < inserted_idx
+    print("OK\n")
+
+
+def test_insert_before_first_heading() -> None:
+    print("=== test_insert_before_first_heading (edge: prepend) ===")
+    enc = build_initial()
+    raw = encoded_v1_to_raw(enc)
+
+    new_enc, err = insert_before_heading_in_document(raw, "Alpha", parse("## Prepended\n\nVery first new section."))
+    assert err is None
+    rendered = render(new_enc)
+    print(rendered)
+    prepended_idx = rendered.index("## Prepended")
+    alpha_idx = rendered.index("## Alpha")
+    intro_idx = rendered.index("Intro paragraph.")
+    # Intro paragraph (first body after H1) must still come before the new prepended section
+    assert intro_idx < prepended_idx < alpha_idx
+    print("OK\n")
+
+
 def test_replace_then_append() -> None:
     print("=== test_replace_then_append (combo) ===")
     enc = build_initial()
@@ -228,5 +266,7 @@ if __name__ == "__main__":
     test_replace_section_ambiguous()
     test_replace_section_not_found()
     test_insert_after_heading()
+    test_insert_before_heading()
+    test_insert_before_first_heading()
     test_replace_then_append()
     print("All Phase 2 tests passed.")

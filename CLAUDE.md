@@ -6,7 +6,7 @@ An MCP server that gives LLM agents (Claude Code, Cline, Claude Desktop, ...) to
 
 ## What is inside
 
-A thin wrapper around the AppFlowy-Cloud REST API plus native Yrs CRDT document assembly on pycrdt. Per-user auth model: every MCP HTTP request carries `X-AppFlowy-Email` / `X-AppFlowy-Password` headers, and tools run under the caller's AppFlowy identity. No shared bot. 10 MCP tools:
+A thin wrapper around the AppFlowy-Cloud REST API plus native Yrs CRDT document assembly on pycrdt. Per-user auth model: every MCP HTTP request carries `X-AppFlowy-Email` / `X-AppFlowy-Password` headers, and tools run under the caller's AppFlowy identity. No shared bot. 11 MCP tools:
 
 | Tool | What it does | AppFlowy endpoint |
 |---|---|---|
@@ -20,6 +20,7 @@ A thin wrapper around the AppFlowy-Cloud REST API plus native Yrs CRDT document 
 | `append_to_page` | append markdown to the end of a page (existing content preserved) | load existing `encoded_collab` → mutate root children Y.Array via pycrdt → `PUT` updated full state |
 | `replace_section` | replace one root-level section (heading + body up to next same-or-higher heading) by heading-text match | load existing → find heading → delete range → insert parsed new blocks → `PUT` updated full state |
 | `insert_after_heading` | insert new blocks immediately after a root-level heading (top of section) | load existing → find heading → insert parsed new blocks at index+1 → `PUT` updated full state |
+| `insert_before_heading` | insert new blocks immediately before a root-level heading (end of previous section) | load existing → find heading → insert parsed new blocks at index → `PUT` updated full state |
 
 ## Folder layout
 

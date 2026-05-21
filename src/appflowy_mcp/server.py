@@ -10,6 +10,7 @@ from .doc_builder import (
     append_blocks_to_document,
     build_document,
     insert_after_heading_in_document,
+    insert_before_heading_in_document,
     replace_section_in_document,
 )
 from .markdown import extract_plain_text, render_document
@@ -500,6 +501,65 @@ def build_server(config: Config) -> tuple[FastMCP, ClientPool]:
             }
 
         encoded, err = insert_after_heading_in_document(
+            raw, heading, new_blocks, match_index
+        )
+        if err is not None:
+            return {"view_id": view_id, "error": err}
+
+        await client.update_page_collab(
+            workspace_id, view_id, encoded, collab_type=0
+        )
+        return {
+            "view_id": view_id,
+            "blocks_written": len(new_blocks),
+            "action": "inserted",
+        }
+
+    @mcp.tool()
+    async def insert_before_heading(
+        ctx: Context,
+        workspace_id: str,
+        view_id: str,
+        heading: str,
+        markdown_content: str,
+        match_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Insert markdown immediately before a root-level heading.
+
+        New blocks go in front of the matched heading — i.e. at the end of
+        the previous section, or at the very top of the page if the heading
+        is the first block. Useful for placing a new H2 section ahead of an
+        existing one without rewriting surrounding content.
+
+        Same matching/ambiguity rules as `replace_section`: case-insensitive,
+        whitespace-normalized, multiple matches require `match_index`.
+
+        Same live-editor conflict as the other write tools.
+
+        Args:
+            workspace_id: Workspace UUID.
+            view_id: Page UUID.
+            heading: Heading text to insert before.
+            markdown_content: Markdown to insert.
+            match_index: 0-based index for disambiguating multiple matches.
+
+        Returns: { view_id, blocks_written, action: "inserted" } on success,
+                 { view_id, error } on no/ambiguous match.
+        """
+        new_blocks = parse_markdown(markdown_content)
+        if not new_blocks:
+            return {"view_id": view_id, "blocks_written": 0, "action": "inserted"}
+
+        client = await pool.get(ctx)
+        page = await client.get_page_view(workspace_id, view_id)
+        raw = bytes(page.get("data", {}).get("encoded_collab") or b"")
+        if not raw:
+            return {
+                "view_id": view_id,
+                "error": "page has no existing document",
+            }
+
+        encoded, err = insert_before_heading_in_document(
             raw, heading, new_blocks, match_index
         )
         if err is not None:

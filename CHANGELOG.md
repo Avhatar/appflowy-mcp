@@ -2,6 +2,18 @@
 
 Version history of `appflowy-mcp`. Format is informal; we record what changed and why.
 
+## 0.12.0 — 2026-05-21
+
+### Added
+- `insert_before_heading(workspace_id, view_id, heading, markdown_content, match_index=None)` — mirror of `insert_after_heading`. Inserts new blocks immediately *before* a root-level heading (i.e. at the end of the previous section). Useful for placing a new H2 section ahead of an existing one without rewriting surrounding content — `append_to_page` always lands at the very bottom, which is wrong when there's a "Не сделаем" / catch-all section that should stay last.
+- Extracted shared `_insert_at_heading(..., before: bool)` helper in [doc_builder.py](src/appflowy_mcp/doc_builder.py); `insert_after_heading_in_document` and `insert_before_heading_in_document` are now thin wrappers.
+
+### Tests
+- [smoke_section.py](smoke_section.py) +2 cases: `insert_before_heading` (basic), and edge case where the target heading is the first heading on the page → new section becomes the new first heading, intro paragraph (between H1 title and first H2) remains in place.
+
+### Reminder
+- One new tool — every Claude Code (or other MCP) client must restart its session after pulling the new image. The tool list is requested at connect time.
+
 ## 0.11.0 — 2026-05-21
 
 ### Added
