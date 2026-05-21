@@ -6,7 +6,12 @@ from mcp.server.fastmcp import Context, FastMCP
 
 from .client import AppFlowyClient
 from .config import Config
-from .doc_builder import append_blocks_to_document, build_document
+from .doc_builder import (
+    append_blocks_to_document,
+    build_document,
+    insert_after_heading_in_document,
+    replace_section_in_document,
+)
 from .markdown import extract_plain_text, render_document
 from .markdown_to_blocks import parse as parse_markdown
 
@@ -387,6 +392,127 @@ def build_server(config: Config) -> tuple[FastMCP, ClientPool]:
             workspace_id, view_id, encoded, collab_type=0
         )
         return {"view_id": view_id, "blocks_appended": len(new_blocks)}
+
+    @mcp.tool()
+    async def replace_section(
+        ctx: Context,
+        workspace_id: str,
+        view_id: str,
+        heading: str,
+        new_markdown: str,
+        match_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Replace one section of a Document page (heading + body) with new markdown.
+
+        A "section" is the heading itself plus every following root-level
+        block until the next heading at the same-or-higher level (or the end
+        of the page).
+
+        Heading matching is case-insensitive and whitespace-normalized. If
+        multiple root-level headings match the same text, the call fails with
+        an error unless `match_index` is supplied (0-based).
+
+        `new_markdown` is the full replacement content for the section. If it
+        starts with a heading at the same level, that becomes the new section
+        title; if not, the heading is removed along with the body. Pass an
+        empty string to delete the section entirely.
+
+        Same live-editor conflict as the other write tools — close all editor
+        tabs/windows for the page before calling.
+
+        Args:
+            workspace_id: Workspace UUID.
+            view_id: Page UUID.
+            heading: Heading text to match (e.g. "Доступные MCP-tools").
+            new_markdown: Markdown to put in place of the section.
+            match_index: 0-based index for disambiguating multiple matches.
+                Default None means "fail if ambiguous".
+
+        Returns: { view_id, blocks_written, action: "replaced" } on success,
+                 { view_id, error } on no/ambiguous match.
+        """
+        new_blocks = parse_markdown(new_markdown)
+
+        client = await pool.get(ctx)
+        page = await client.get_page_view(workspace_id, view_id)
+        raw = bytes(page.get("data", {}).get("encoded_collab") or b"")
+        if not raw:
+            return {
+                "view_id": view_id,
+                "error": "page has no existing document",
+            }
+
+        encoded, err = replace_section_in_document(
+            raw, heading, new_blocks, match_index
+        )
+        if err is not None:
+            return {"view_id": view_id, "error": err}
+
+        await client.update_page_collab(
+            workspace_id, view_id, encoded, collab_type=0
+        )
+        return {
+            "view_id": view_id,
+            "blocks_written": len(new_blocks),
+            "action": "replaced",
+        }
+
+    @mcp.tool()
+    async def insert_after_heading(
+        ctx: Context,
+        workspace_id: str,
+        view_id: str,
+        heading: str,
+        markdown_content: str,
+        match_index: int | None = None,
+    ) -> dict[str, Any]:
+        """Insert markdown immediately after a root-level heading (top of section).
+
+        Same matching/ambiguity rules as `replace_section`: case-insensitive,
+        whitespace-normalized, multiple matches require `match_index`.
+
+        Existing section body is preserved — new blocks go between the
+        heading and whatever was its first body block.
+
+        Same live-editor conflict as the other write tools.
+
+        Args:
+            workspace_id: Workspace UUID.
+            view_id: Page UUID.
+            heading: Heading text to insert after.
+            markdown_content: Markdown to insert.
+            match_index: 0-based index for disambiguating multiple matches.
+
+        Returns: { view_id, blocks_written, action: "inserted" } on success,
+                 { view_id, error } on no/ambiguous match.
+        """
+        new_blocks = parse_markdown(markdown_content)
+        if not new_blocks:
+            return {"view_id": view_id, "blocks_written": 0, "action": "inserted"}
+
+        client = await pool.get(ctx)
+        page = await client.get_page_view(workspace_id, view_id)
+        raw = bytes(page.get("data", {}).get("encoded_collab") or b"")
+        if not raw:
+            return {
+                "view_id": view_id,
+                "error": "page has no existing document",
+            }
+
+        encoded, err = insert_after_heading_in_document(
+            raw, heading, new_blocks, match_index
+        )
+        if err is not None:
+            return {"view_id": view_id, "error": err}
+
+        await client.update_page_collab(
+            workspace_id, view_id, encoded, collab_type=0
+        )
+        return {
+            "view_id": view_id,
+            "blocks_written": len(new_blocks),
+            "action": "inserted",
+        }
 
     @mcp.tool()
     async def search_pages(

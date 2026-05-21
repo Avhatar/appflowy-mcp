@@ -2,6 +2,27 @@
 
 Version history of `appflowy-mcp`. Format is informal; we record what changed and why.
 
+## 0.11.0 — 2026-05-21
+
+### Added
+- `replace_section(workspace_id, view_id, heading, new_markdown, match_index=None)` — replace a root-level section (heading + body up to next same-or-higher heading) with new markdown. Empty `new_markdown` deletes the section.
+- `insert_after_heading(workspace_id, view_id, heading, markdown_content, match_index=None)` — insert new blocks immediately after a root-level heading (at the top of its section); existing body preserved.
+- Helpers in [doc_builder.py](src/appflowy_mcp/doc_builder.py): `_find_root_headings`, `_section_end_index`, `_delete_block_tree`, `_block_plain_text`, `_block_data_dict`, `_normalize_heading`, `_resolve_match`. `replace_section_in_document` and `insert_after_heading_in_document` build on these.
+- Smoke test [smoke_section.py](smoke_section.py) — 6 cases: replace, delete-section, ambiguity → error, ambiguity → resolved via `match_index`, not-found, insert-after-heading, combined replace+append. All offline (pure pycrdt + bincode round-trip).
+
+### Heading-match semantics
+- Case-insensitive, whitespace-collapsed (multiple spaces / newlines → one space). Trailing markdown marks are NOT matched — pass plain text only.
+- Root-level headings only. Headings inside lists, table cells, etc. are not addressable in this phase.
+- Multiple matches → error with the count unless `match_index` is supplied. 0-based.
+
+### Design notes
+- Phase 2 of the partial-editing track. Phase 1 was `append_to_page` (0.10.0). Phase 3 (block-id addressing, more positional inserts) deferred until concrete need.
+- Same WS-conflict caveat as the rest of the write path. The wire format is still full-state `encoded_collab_v1` via `PUT /collab/{obj}` — partial Yrs updates over `/web-update` remain parked.
+- The Y.Array deletion strategy is "repeatedly delete index `start`" rather than a slice — pycrdt's Y.Array doesn't expose slice deletion, and indices shift after each remove. Tested with up to 9-block documents; structurally O(n) for the deletion step, fine at wiki scale.
+
+### Reminder
+- Two new tools — every Claude Code (or other MCP) client must restart its session after pulling the new image. The tool list is requested at connect time.
+
 ## 0.10.0 — 2026-05-21
 
 ### Added

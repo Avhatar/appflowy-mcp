@@ -140,6 +140,242 @@ def build_document(blocks: list[dict[str, Any]]) -> bytes:
     return _encode_encoded_collab(state_vector, doc_state, version=0)
 
 
+def _block_plain_text(
+    block_id: str, blocks_map: Map, text_map: Map
+) -> str:
+    """Plain-text contents of a block (formatting stripped).
+
+    Used for heading matching. Reads the block's `external_id` → corresponding
+    Y.Text in text_map → concat of all insert chunks (regardless of attrs).
+    """
+    if block_id not in blocks_map:
+        return ""
+    block = blocks_map[block_id]
+    if "external_id" not in list(block.keys()):
+        return ""
+    ext_id = block["external_id"]
+    if not ext_id or ext_id not in text_map:
+        return ""
+    runs = text_map[ext_id].diff()
+    return "".join(chunk for chunk, _attrs in runs)
+
+
+def _block_data_dict(block: Map) -> dict[str, Any]:
+    if "data" not in list(block.keys()):
+        return {}
+    raw = block["data"]
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _normalize_heading(s: str) -> str:
+    return " ".join(s.split()).lower()
+
+
+def _find_root_headings(
+    blocks_map: Map, text_map: Map, root_children: Array, target: str
+) -> list[tuple[int, str, int]]:
+    """Return all root-level heading blocks matching `target` (case-insensitive,
+    whitespace-normalized). Each entry: (index_in_root_children, block_id, level).
+    """
+    target_norm = _normalize_heading(target)
+    out: list[tuple[int, str, int]] = []
+    for i, bid in enumerate(list(root_children)):
+        if bid not in blocks_map:
+            continue
+        block = blocks_map[bid]
+        if block["ty"] != "heading":
+            continue
+        text = _block_plain_text(bid, blocks_map, text_map)
+        if _normalize_heading(text) == target_norm:
+            level = int(_block_data_dict(block).get("level", 1))
+            out.append((i, bid, level))
+    return out
+
+
+def _section_end_index(
+    blocks_map: Map, root_children: Array, start_index: int, heading_level: int
+) -> int:
+    """Index of the next root block that ends the section: a heading at level
+    ≤ `heading_level`. Returns len(root_children) if no such block.
+    """
+    children = list(root_children)
+    n = len(children)
+    for i in range(start_index + 1, n):
+        bid = children[i]
+        if bid not in blocks_map:
+            continue
+        block = blocks_map[bid]
+        if block["ty"] != "heading":
+            continue
+        level = int(_block_data_dict(block).get("level", 1))
+        if level <= heading_level:
+            return i
+    return n
+
+
+def _delete_block_tree(
+    block_id: str, blocks_map: Map, children_map: Map, text_map: Map
+) -> None:
+    """Recursively remove a block and its descendants from all three maps."""
+    if block_id not in blocks_map:
+        return
+    block = blocks_map[block_id]
+    keys = list(block.keys())
+    if "children" in keys:
+        children_key = block["children"]
+        if children_key and children_key in list(children_map.keys()):
+            for cid in list(children_map[children_key]):
+                _delete_block_tree(cid, blocks_map, children_map, text_map)
+            del children_map[children_key]
+    if "external_id" in keys:
+        ext_id = block["external_id"]
+        if ext_id and ext_id in list(text_map.keys()):
+            del text_map[ext_id]
+    del blocks_map[block_id]
+
+
+def _resolve_match(
+    matches: list[tuple[int, str, int]],
+    heading: str,
+    match_index: int | None,
+) -> tuple[tuple[int, str, int] | None, str | None]:
+    if not matches:
+        return None, f"heading not found: {heading!r}"
+    if match_index is None:
+        if len(matches) > 1:
+            return None, (
+                f"multiple matches ({len(matches)}) for heading {heading!r}; "
+                "specify match_index (0-based)"
+            )
+        return matches[0], None
+    if match_index < 0 or match_index >= len(matches):
+        return None, (
+            f"match_index={match_index} out of range; {len(matches)} matches "
+            f"found for heading {heading!r}"
+        )
+    return matches[match_index], None
+
+
+def replace_section_in_document(
+    existing_encoded_collab: bytes,
+    heading: str,
+    new_blocks: list[dict[str, Any]],
+    match_index: int | None = None,
+) -> tuple[bytes | None, str | None]:
+    """Replace one root-level section (heading + everything until the next
+    same-or-higher heading) with new blocks. Returns (encoded_v1, error).
+
+    Matching is case-insensitive and whitespace-normalized. If multiple
+    root-level headings match the same text, `match_index` must be specified
+    or the call returns an error without writing.
+
+    `new_blocks` is the parsed markdown for the replacement — if it starts
+    with a heading at the section level you're replacing, that becomes the
+    new section header; if not, the heading is gone. Passing `new_blocks=[]`
+    deletes the section entirely.
+    """
+    doc = Doc()
+    doc["data"] = Map({})
+    doc.apply_update(existing_encoded_collab)
+
+    document = doc["data"]["document"]
+    page_id = document["page_id"]
+    blocks_map = document["blocks"]
+    meta = document["meta"]
+    children_map = meta["children_map"]
+    text_map = meta["text_map"]
+
+    page_block = blocks_map[page_id]
+    root_children_key = page_block["children"]
+    root_children = children_map[root_children_key]
+
+    matches = _find_root_headings(blocks_map, text_map, root_children, heading)
+    match, err = _resolve_match(matches, heading, match_index)
+    if err is not None or match is None:
+        return None, err
+
+    start_index, _heading_id, level = match
+    end_index = _section_end_index(blocks_map, root_children, start_index, level)
+
+    # Capture IDs to delete before we mutate the array.
+    to_delete = list(root_children)[start_index:end_index]
+
+    # Remove the slot range from the Y.Array — repeatedly delete the leftmost
+    # element of the range, since indices shift after each deletion. pycrdt
+    # supports __delitem__ on a single index.
+    for _ in range(end_index - start_index):
+        del root_children[start_index]
+
+    # Free the orphaned block / text / children entries.
+    for bid in to_delete:
+        _delete_block_tree(bid, blocks_map, children_map, text_map)
+
+    # Insert the new blocks at the same position.
+    new_ids: list[str] = []
+    for b in new_blocks:
+        nid = _add_block(blocks_map, children_map, text_map, page_id, b)
+        new_ids.append(nid)
+    for offset, nid in enumerate(new_ids):
+        root_children.insert(start_index + offset, nid)
+
+    doc_state = doc.get_update()
+    state_vector = doc.get_state()
+    return _encode_encoded_collab(state_vector, doc_state, version=0), None
+
+
+def insert_after_heading_in_document(
+    existing_encoded_collab: bytes,
+    heading: str,
+    new_blocks: list[dict[str, Any]],
+    match_index: int | None = None,
+) -> tuple[bytes | None, str | None]:
+    """Insert new blocks immediately after a root-level heading (i.e. at the
+    very top of that section). Returns (encoded_v1, error).
+
+    Same matching/ambiguity rules as `replace_section_in_document`.
+    """
+    doc = Doc()
+    doc["data"] = Map({})
+    doc.apply_update(existing_encoded_collab)
+
+    document = doc["data"]["document"]
+    page_id = document["page_id"]
+    blocks_map = document["blocks"]
+    meta = document["meta"]
+    children_map = meta["children_map"]
+    text_map = meta["text_map"]
+
+    page_block = blocks_map[page_id]
+    root_children_key = page_block["children"]
+    root_children = children_map[root_children_key]
+
+    matches = _find_root_headings(blocks_map, text_map, root_children, heading)
+    match, err = _resolve_match(matches, heading, match_index)
+    if err is not None or match is None:
+        return None, err
+
+    start_index, _heading_id, _level = match
+    insert_at = start_index + 1
+
+    new_ids: list[str] = []
+    for b in new_blocks:
+        nid = _add_block(blocks_map, children_map, text_map, page_id, b)
+        new_ids.append(nid)
+    for offset, nid in enumerate(new_ids):
+        root_children.insert(insert_at + offset, nid)
+
+    doc_state = doc.get_update()
+    state_vector = doc.get_state()
+    return _encode_encoded_collab(state_vector, doc_state, version=0), None
+
+
 def append_blocks_to_document(
     existing_encoded_collab: bytes, blocks: list[dict[str, Any]]
 ) -> bytes:
